@@ -1,0 +1,8 @@
+*.swp
+
+.env
+/*.env
+
+node_modules/**
+
+.clasp.json

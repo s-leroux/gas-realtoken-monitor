@@ -1,0 +1,14 @@
+{
+  "name": "gas-realt-monitor",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "push": "clasp push",
+    "deploy": "npm run build && npm run push",
+    "test": ". ./.env; mocha"
+  },
+  "dependencies": {
+    "chai": "^5.2.1",
+    "mocha": "^11.7.1"
+  }
+}

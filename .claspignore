@@ -1,0 +1,9 @@
+*.swp
+
+.env
+/*.env
+
+package.json
+node_modules/**
+
+test/**

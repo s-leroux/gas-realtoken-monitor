@@ -8,6 +8,39 @@ function toDateOnly(date) {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate());
 }
 
+// Declared as `var` to make it accessible in the global context for testing purposes
+var Message = class Message {
+  /**
+   * Creates a new Message instance.
+   */
+  constructor() {
+    this.critical = false;
+    /** @type {string[]} */
+    this.lines = [];
+  }
+
+  /**
+   * Adds one or more lines to the message.
+   * @param {boolean} critical - true for critical message.
+   * @param {...string} lines - One or more lines to append.
+   * @returns {Message} This instance for chaining.
+   */
+  push(critical, ...lines) {
+    if (critical) this.critical = true;
+
+    this.lines.push(...lines);
+    return this;
+  }
+
+  /**
+   * Returns the full message text, with lines joined by newline characters.
+   * @returns {string} The concatenated message text.
+   */
+  text() {
+    return this.lines.join("\n");
+  }
+};
+
 function loadProductsForSale() {
   const response = UrlFetchApp.fetch(REALT_PRODUCTS_ENDPOINT);
   const json = JSON.parse(response.getContentText()) || {};
@@ -43,12 +76,24 @@ function loadSheet(sheetName) {
   return [headers, ranges, columns];
 }
 
-function pushMessageProductNotFound(messages, title) {
-  messages.push(`NOT FOUND: ${title}`);
+/**
+ *
+ * @param {Message} message
+ * @param {boolean} critical
+ * @param {string} title
+ */
+function pushMessageProductNotFound(message, critical, title) {
+  message.push(critical, `NOT FOUND: ${title}`);
 }
 
-function pushMessageLowStock(messages, product) {
-  messages.push(`LOW STOCK: ${product.title} × ${product.stock}`);
+/**
+ *
+ * @param {Message} message
+ * @param {boolean} critical
+ * @param {object} product
+ */
+function pushMessageLowStock(message, critical, product) {
+  message.push(critical, `LOW STOCK: ${product.title} × ${product.stock}`);
 }
 
 function update() {
@@ -57,25 +102,27 @@ function update() {
   const productsForSale = loadProductsForSale();
   const dataTime = new Date(productsForSale.time * 1000);
 
-  const messages = [];
+  const message = new Message();
 
   for (let i = 0; i < columns["Name"].length; ++i) {
     const product = findProduct(productsForSale, columns["Name"][i]);
     columns["Checked"][i] = dataTime;
     if (!product) {
-      if (today > columns["Sent"][i]) {
-        pushMessageProductNotFound(messages, columns["Name"][i]);
-      }
+      pushMessageProductNotFound(
+        message,
+        today > columns["Sent"][i],
+        columns["Name"][i]
+      );
       columns["Status"][i] = "NOT FOUND";
       columns["Stock"][i] = 0;
       columns["Max Purchase"][i] = 0;
       columns["Sent"][i] = today;
-    } else if (today > columns["Sent"][i]) {
+    } else {
       columns["Stock"][i] = product.stock;
       columns["Max Purchase"][i] = product.max_purchase;
 
       if (product.stock < 1.1 * product.max_purchase) {
-        pushMessageLowStock(messages, product);
+        pushMessageLowStock(message, today > columns["Sent"][i], product);
         columns["Status"][i] = "LOW STOCK";
         columns["Sent"][i] = today;
       } else {
@@ -84,11 +131,11 @@ function update() {
     }
   }
 
-  if (messages.length) {
+  if (message.critical) {
     MailApp.sendEmail({
       to: USER_EMAIL,
       subject: `⚠️ Realt Alert`,
-      body: messages.join("\n"),
+      body: message.text(),
     });
   }
 

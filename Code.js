@@ -82,14 +82,14 @@ function update() {
         columns["Status"][i] = product.status.toUpperCase();
       }
     }
+  }
 
-    if (messages.length) {
-      MailApp.sendEmail({
-        to: USER_EMAIL,
-        subject: `⚠️ Realt Alert`,
-        body: messages.join("\n"),
-      });
-    }
+  if (messages.length) {
+    MailApp.sendEmail({
+      to: USER_EMAIL,
+      subject: `⚠️ Realt Alert`,
+      body: messages.join("\n"),
+    });
   }
 
   // Update columns

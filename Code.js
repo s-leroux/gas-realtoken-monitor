@@ -1,12 +1,21 @@
 const REALT_PRODUCTS_ENDPOINT =
   "https://realt.co/wp-json/realt/v1/products/for_sale";
 
-const USER_EMAIL =
-  PropertiesService.getScriptProperties().getProperty("USER_EMAIL");
+const properties = PropertiesService.getScriptProperties();
+const USER_EMAIL = properties.getProperty("USER_EMAIL");
+const SPREADSHEET_ID = properties.getProperty("SPREADSHEET_ID");
+
+const spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+const sheet = spreadsheet.getSheetByName("MONITOR");
 
 function toDateOnly(date) {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate());
 }
+
+//----------------------------------------------------------------------------
+//  BEGIN COMMON MESSAGE INTERFACE
+//  v1.0
+//----------------------------------------------------------------------------
 
 // Declared as `var` to make it accessible in the global context for testing purposes
 var Message = class Message {
@@ -41,6 +50,53 @@ var Message = class Message {
   }
 };
 
+//----------------------------------------------------------------------------
+//  END COMMON MESSAGE INTERFACE
+//----------------------------------------------------------------------------
+
+//----------------------------------------------------------------------------
+//  BEGIN COMMON TABLE INTERFACE
+//  v1.0
+//----------------------------------------------------------------------------
+var Table = class Table {
+  /**
+   * Creates a new Table instance.
+   * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - The Google Sheets sheet to operate on.
+   */
+  constructor(sheet) {
+    // 1. Get the header row (row 1, starting in A1)
+    const headers = (this.headers = sheet
+      .getRange(1, 1, 1, sheet.getLastColumn())
+      .getValues()[0]);
+
+    // 2. Load the table in memory
+    const columns = (this.columns = Object.create(null));
+    const ranges = (this.ranges = Object.create(null));
+
+    headers.forEach((header, idx) => {
+      const range = (ranges[header] = sheet.getRange(
+        2,
+        idx + 1,
+        sheet.getLastRow() - 1
+      ));
+      columns[header] = range.getValues().flat();
+    });
+  }
+
+  update(...headers) {
+    for (const header of headers) {
+      this.ranges[header].setValues(this.columns[header].map((x) => [x]));
+    }
+  }
+
+  updateAll() {
+    this.update(...this.header);
+  }
+};
+//----------------------------------------------------------------------------
+//  END COMMON TABLE INTERFACE
+//----------------------------------------------------------------------------
+
 function loadProductsForSale() {
   const response = UrlFetchApp.fetch(REALT_PRODUCTS_ENDPOINT);
   const json = JSON.parse(response.getContentText()) || {};
@@ -52,28 +108,6 @@ function findProduct(productsForSale, productName) {
   return productsForSale.products.find(
     (product) => product.title === productName
   );
-}
-
-function loadSheet(sheetName) {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(sheetName);
-
-  // 1. Get the header row (row 1, starting in A1)
-  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
-
-  // 2. Load the table in memory
-  const columns = Object.create(null);
-  const ranges = Object.create(null);
-
-  headers.forEach((header, idx) => {
-    const range = (ranges[header] = sheet.getRange(
-      2,
-      idx + 1,
-      sheet.getLastRow() - 1
-    ));
-    columns[header] = range.getValues().flat();
-  });
-
-  return [headers, ranges, columns];
 }
 
 /**
@@ -98,12 +132,13 @@ function pushMessageLowStock(message, critical, product) {
 
 function update() {
   const today = toDateOnly(new Date());
-  const [headers, ranges, columns] = loadSheet("Monitor");
+  const table = new Table(sheet);
   const productsForSale = loadProductsForSale();
   const dataTime = new Date(productsForSale.time * 1000);
 
   const message = new Message();
 
+  const columns = table.columns;
   for (let i = 0; i < columns["Name"].length; ++i) {
     const product = findProduct(productsForSale, columns["Name"][i]);
     columns["Checked"][i] = dataTime;
@@ -140,7 +175,5 @@ function update() {
   }
 
   // Update columns
-  for (const header of ["Status", "Stock", "Max Purchase", "Checked", "Sent"]) {
-    ranges[header].setValues(columns[header].map((x) => [x]));
-  }
+  table.update("Status", "Stock", "Max Purchase", "Checked", "Sent");
 }

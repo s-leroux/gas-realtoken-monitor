@@ -22,34 +22,48 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Mock Google Apps Script APIs
-const gasGlobals = {
-  UrlFetchApp,
-  SpreadsheetApp: {
-    getActiveSpreadsheet: () => ({
-      getSheetByName: () => ({
+const gasGlobals = (function () {
+  const SpreadsheetApp = new (class {
+    getActiveSpreadsheet() {
+      return new Sheet();
+    }
+
+    openById() {
+      return new Sheet();
+    }
+  })();
+
+  const Sheet = class {
+    getSheetByName() {
+      return {
         getRange: () => ({
           getValues: () => [[]],
           setValues: () => {},
           getLastColumn: () => 1,
           getLastRow: () => 1,
         }),
-      }),
-    }),
-  },
-  Logger: {
-    log: console.log,
-  },
-  MailApp: {
-    sendEmail: () => {},
-    getRemainingDailyQuota: () => 100,
-  },
+      };
+    }
+  };
 
-  PropertiesService: {
-    getScriptProperties: () => ({
-      getProperty: (key) => process.env[key],
-    }),
-  },
-};
+  return {
+    UrlFetchApp,
+    SpreadsheetApp,
+    Logger: {
+      log: console.log,
+    },
+    MailApp: {
+      sendEmail: () => {},
+      getRemainingDailyQuota: () => 100,
+    },
+
+    PropertiesService: {
+      getScriptProperties: () => ({
+        getProperty: (key) => process.env[key],
+      }),
+    },
+  };
+})();
 
 export function loadGasCode(fileName) {
   // Read the GAS code file

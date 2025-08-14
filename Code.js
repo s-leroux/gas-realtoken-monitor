@@ -14,7 +14,7 @@ function toDateOnly(date) {
 
 //----------------------------------------------------------------------------
 //  BEGIN COMMON MESSAGE INTERFACE
-//  v1.0
+//  v1.1
 //----------------------------------------------------------------------------
 
 // Declared as `var` to make it accessible in the global context for testing purposes
@@ -31,13 +31,18 @@ var Message = class Message {
   /**
    * Adds one or more lines to the message.
    * @param {boolean} critical - true for critical message.
-   * @param {...string} lines - One or more lines to append.
+   * @param {...string} fragments - One or more lines to append.
    * @returns {Message} This instance for chaining.
    */
-  push(critical, ...lines) {
+  push(critical, ...fragments) {
     if (critical) this.critical = true;
 
-    this.lines.push(...lines);
+    for (const fragment of fragments) {
+      const lines = fragment
+        .split(/\r?\n/)
+        .map((line) => (critical ? "| " : "  ") + line);
+      this.lines.push(...lines);
+    }
     return this;
   }
 
@@ -65,13 +70,13 @@ var Table = class Table {
    */
   constructor(sheet) {
     // 1. Get the header row (row 1, starting in A1)
-    const headers = (this.headers = sheet
+    const headers = sheet
       .getRange(1, 1, 1, sheet.getLastColumn())
-      .getValues()[0]);
+      .getValues()[0];
 
     // 2. Load the table in memory
-    const columns = (this.columns = Object.create(null));
-    const ranges = (this.ranges = Object.create(null));
+    const columns = Object.create(null);
+    const ranges = Object.create(null);
 
     headers.forEach((header, idx) => {
       const range = (ranges[header] = sheet.getRange(
@@ -81,16 +86,54 @@ var Table = class Table {
       ));
       columns[header] = range.getValues().flat();
     });
+
+    this.headers = headers;
+    this.columns = columns;
+    this.ranges = ranges;
   }
 
-  update(...headers) {
+  getNumRows() {
+    return this.headers.length > 0 ? this.columns[this.headers[0]].length : 0;
+  }
+  getNumColumns() {
+    return this.headers.length;
+  }
+
+  getRow(idx) {
+    const obj = Object.create(null);
+
+    for (const header of this.headers) {
+      obj[header] = this.columns[header][idx];
+    }
+
+    return obj;
+  }
+
+  append(obj) {
+    for (const header of this.headers) {
+      const column = this.columns[header].push(obj[header]);
+      this.ranges[header] = this.ranges[header].offset(
+        0,
+        0,
+        this.columns[header].length
+      );
+    }
+  }
+
+  update(idx, obj) {
+    for (const header of this.headers) {
+      this.columns[header][idx] = obj[header];
+    }
+  }
+
+  write(...headers) {
     for (const header of headers) {
       this.ranges[header].setValues(this.columns[header].map((x) => [x]));
     }
   }
 
-  updateAll() {
-    this.update(...this.header);
+  writeAll() {
+    this.write(...this.headers);
   }
 };
 //----------------------------------------------------------------------------
@@ -111,6 +154,24 @@ function findProduct(productsForSale, productName) {
 }
 
 /**
+ * Removes and returns the product whose `title` matches `productName`.
+ *
+ * @param {Object} productsForSale – An object with a `products` array.
+ * @param {string} productName     – The product title to search for.
+ * @returns {Object|undefined}     – The popped product, or undefined if none found.
+ */
+function popProduct(productsForSale, productName) {
+  const idx = productsForSale.products.findIndex(
+    (product) => product.title === productName
+  );
+
+  if (idx === -1) return undefined; // not found
+
+  // splice returns an array of removed items; take the first one
+  return productsForSale.products.splice(idx, 1)[0];
+}
+
+/**
  *
  * @param {Message} message
  * @param {boolean} critical
@@ -126,8 +187,31 @@ function pushMessageProductNotFound(message, critical, title) {
  * @param {boolean} critical
  * @param {object} product
  */
+function pushMessageUntracked(message, critical, product) {
+  message.push(critical, `UNTRACKED: ${product.title} × ${product.stock}`);
+}
+
+/**
+ *
+ * @param {Message} message
+ * @param {boolean} critical
+ * @param {object} product
+ */
 function pushMessageLowStock(message, critical, product) {
   message.push(critical, `LOW STOCK: ${product.title} × ${product.stock}`);
+}
+
+/**
+ *
+ * @param {Message} message
+ * @param {boolean} critical
+ * @param {object} product
+ */
+function pushMessageSold(message, critical, product, qty) {
+  message.push(
+    critical,
+    `SELLING: ${product.title} Sold: ${qty} ; Remaining ${product.stock}`
+  );
 }
 
 function update() {
@@ -138,32 +222,60 @@ function update() {
 
   const message = new Message();
 
-  const columns = table.columns;
-  for (let i = 0; i < columns["Name"].length; ++i) {
-    const product = findProduct(productsForSale, columns["Name"][i]);
-    columns["Checked"][i] = dataTime;
+  for (let i = 0; i < table.getNumRows(); ++i) {
+    const row = table.getRow(i);
+    const product = popProduct(productsForSale, row["Name"]);
+    row["Checked"] = dataTime;
     if (!product) {
-      pushMessageProductNotFound(
-        message,
-        today > columns["Sent"][i],
-        columns["Name"][i]
-      );
-      columns["Status"][i] = "NOT FOUND";
-      columns["Stock"][i] = 0;
-      columns["Max Purchase"][i] = 0;
-      columns["Sent"][i] = today;
+      pushMessageProductNotFound(message, today > row["Sent"], row["Name"]);
+      row["Status"] = "NOT FOUND";
+      row["Stock"] = 0;
+      row["Max Purchase"] = 0;
+      row["Sent"] = today;
     } else {
-      columns["Stock"][i] = product.stock;
-      columns["Max Purchase"][i] = product.max_purchase;
-
       if (product.stock < 1.1 * product.max_purchase) {
-        pushMessageLowStock(message, today > columns["Sent"][i], product);
-        columns["Status"][i] = "LOW STOCK";
-        columns["Sent"][i] = today;
+        pushMessageLowStock(
+          message,
+          today > row["Sent"] && row["Status"] !== "LOW STOCK",
+          product
+        );
+        row["Status"] = "LOW STOCK";
+        row["Sent"] = today;
+      } else if (product.stock < row["Stock"]) {
+        pushMessageSold(
+          message,
+          today > row["Sent"] && row["Status"] !== "SELLING",
+          product,
+          row["Stock"] - product.stock
+        );
+
+        row["Status"] = "SELLING";
+        row["Sent"] = today;
       } else {
-        columns["Status"][i] = product.status.toUpperCase();
+        row["Status"] = product.status.toUpperCase();
       }
+
+      row["Stock"] = product.stock;
+      row["Max Purchase"] = product.max_purchase;
     }
+
+    table.update(i, row);
+  }
+
+  for (const product of productsForSale.products) {
+    // These products are currently not tracked
+    row = Object.create(null);
+    row["Name"] = product.title;
+    row["Ignore"] = false;
+    row["Checked"] = today;
+    row["Sent"] = today;
+    row["Status"] = product.status.toUpperCase();
+    row["Stock"] = product.stock;
+    row["Max Purchase"] = product.max_purchase;
+
+    pushMessageUntracked(message, true, product);
+
+    table.append(row);
   }
 
   if (message.critical) {
@@ -175,5 +287,5 @@ function update() {
   }
 
   // Update columns
-  table.update("Status", "Stock", "Max Purchase", "Checked", "Sent");
+  table.writeAll();
 }

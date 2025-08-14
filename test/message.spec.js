@@ -12,33 +12,39 @@ const gasContext = loadGasCode("Code.js");
 const { Message } = gasContext;
 
 describe("Message Building Subsystem", function () {
-  describe("new Message()", function () {
-    it("should create a new Message instance", function () {
-      new Message();
-    });
+  describe("Message", function () {
+    describe("new Message()", function () {
+      it("should create a new Message instance", function () {
+        new Message();
+      });
 
-    it("should gather messages", function () {
-      const lines = ["abc", "dev", "ghi"];
+      it("should gather messages", function () {
+        const lines = ["abc", "dev", "ghi"];
 
-      const message = new Message();
-      for (const line of lines) {
-        message.push(false, line);
-      }
+        const message = new Message();
+        for (const line of lines) {
+          message.push(false, line);
+        }
 
-      assert.strictEqual(message.text(), lines.join("\n"));
-      assert.strictEqual(message.critical, false);
-    });
+        assert.strictEqual(
+          message.text(),
+          lines.map((line) => `  ${line}`).join("\n")
+        );
+        assert.strictEqual(message.critical, false);
+      });
 
-    it("should remember critical messages", function () {
-      const lines = ["abc", "dev", "ghi"];
+      it("should remember critical messages", function () {
+        const output = ["  abc", "| dev", "  ghi"];
+        const input = output.map((line) => line.substring(2));
 
-      const message = new Message();
-      message.push(false, lines[0]);
-      message.push(true, lines[1]);
-      message.push(false, lines[2]);
+        const message = new Message();
+        message.push(false, input[0]);
+        message.push(true, input[1]);
+        message.push(false, input[2]);
 
-      assert.strictEqual(message.text(), lines.join("\n"));
-      assert.strictEqual(message.critical, true);
+        assert.strictEqual(message.text(), output.join("\n"));
+        assert.strictEqual(message.critical, true);
+      });
     });
   });
 });

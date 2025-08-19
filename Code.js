@@ -12,6 +12,99 @@ function toDateOnly(date) {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate());
 }
 
+function G(cache, ticker, symbol) {
+  return cache[ticker][symbol];
+}
+
+const SYMBOL_TABLE = {
+  __proto__: null,
+
+  STOCK: G,
+  PREV_STOCK: G,
+  MAX_PURCHASE: G,
+  STATUS: G,
+};
+
+//----------------------------------------------------------------------------
+//  BEGIN COMMON EVALUATION INTERFACE
+//  v1.1
+//----------------------------------------------------------------------------
+
+/**
+ * Retrieves cached data for a ticker and field, using a factory method to populate missing data.
+ *
+ * This function implements a lazy-loading cache pattern. It first checks if the required field
+ * for the given ticker exists in the global cache. If the field is missing, it calls the factory
+ * method to populate the cache with data for that ticker, then returns the requested field.
+ *
+ * @param {string} ticker - The stock ticker symbol (e.g., "AAPL", "GOOGL"). Will be converted to uppercase.
+ * @param {string} field - The specific field to retrieve from the cached data (e.g., "PRICE", "VOLUME")
+ * @param {Function} factory - A function that populates the cache for a ticker. Called as factory(data, ticker)
+ *
+ * @returns {*} The cached value for the specified ticker and field
+ *
+ * @example
+ * // First call - cache miss, factory is called
+ * const price = getValue("AAPL", "PRICE", av_api_global_quote);
+ *
+ * // Second call - cache hit, factory is not called
+ * const volume = getValue("AAPL", "VOLUME", av_api_global_quote);
+ */
+function getValue(cache, ticker, field, factory) {
+  ticker = ticker.toUpperCase();
+  field = field.toUpperCase();
+
+  let data = cache[ticker];
+  if (!data) {
+    data = cache[ticker] = Object.create(null);
+  }
+
+  let result = data[field];
+  if (result === undefined) {
+    factory(data, ticker);
+    result = data[field];
+  }
+
+  return result;
+}
+
+function evaluateSymbol(cache, ticker, symbol) {
+  const handler = SYMBOL_TABLE[symbol];
+
+  if (typeof handler === "function") {
+    return handler(cache, ticker, symbol);
+  }
+  if (handler === undefined) {
+    Logger.log(`⚠ Symbol not found: ${symbol}`);
+    return "NaN";
+  }
+
+  return getValue(cache, ticker, ...handler);
+}
+
+function evaluateExpression(cache, ticker, expr) {
+  // We assume expr is a proper JS expression.
+  // We don't do any security ckeck!
+  //
+  // THIS CODE IS PRONE TO JS INJECTION
+  //
+
+  const IDENTIFIER_REGEX = /\b[0-9]*[A-Z_][A-Z0-9_]*\b/g;
+
+  const trace = Object.create(null);
+  const compiled = expr.replaceAll(IDENTIFIER_REGEX, (symbol) => {
+    return (trace[symbol] = evaluateSymbol(cache, ticker, symbol));
+  });
+
+  /* eslint-disable no-eval */
+  return [eval(compiled), trace];
+  /* eslint-enable  no-eval */
+}
+
+//----------------------------------------------------------------------------
+//  END COMMON EVALUATION INTERFACE
+//----------------------------------------------------------------------------
+
 //----------------------------------------------------------------------------
 //  BEGIN COMMON MESSAGE INTERFACE
 //  v1.1
@@ -178,7 +271,7 @@ function popProduct(productsForSale, productName) {
  * @param {string} title
  */
 function pushMessageProductNotFound(message, critical, title) {
-  message.push(critical, `NOT FOUND: ${title}`);
+  message.push(critical, `${title}\n\tNOT FOUND`);
 }
 
 /**
@@ -188,29 +281,20 @@ function pushMessageProductNotFound(message, critical, title) {
  * @param {object} product
  */
 function pushMessageUntracked(message, critical, product) {
-  message.push(critical, `UNTRACKED: ${product.title} × ${product.stock}`);
+  message.push(critical, `${product.title} × ${product.stock}\n\tUNTRACKED`);
 }
 
-/**
- *
- * @param {Message} message
- * @param {boolean} critical
- * @param {object} product
- */
-function pushMessageLowStock(message, critical, product) {
-  message.push(critical, `LOW STOCK: ${product.title} × ${product.stock}`);
-}
-
-/**
- *
- * @param {Message} message
- * @param {boolean} critical
- * @param {object} product
- */
-function pushMessageSold(message, critical, product, qty) {
+function pushMessageCondition(message, condition, trace, action, product) {
   message.push(
-    critical,
-    `SELLING: ${product.title} Sold: ${qty} ; Remaining ${product.stock}`
+    true,
+    [
+      `${product.title} × ${product.stock}`,
+      `\t${condition}`,
+      ...Object.entries(trace).map(
+        ([symbol, value]) => `\t${symbol} = ${value}`
+      ),
+      `\t${action}`,
+    ].join("\n")
   );
 }
 
@@ -233,26 +317,28 @@ function update() {
       row["Max Purchase"] = 0;
       row["Sent"] = today;
     } else {
-      if (product.stock < 1.1 * product.max_purchase) {
-        pushMessageLowStock(
-          message,
-          today > row["Sent"] && row["Status"] !== "LOW STOCK",
-          product
-        );
-        row["Status"] = "LOW STOCK";
-        row["Sent"] = today;
-      } else if (product.stock < row["Stock"]) {
-        pushMessageSold(
-          message,
-          today > row["Sent"] && row["Status"] !== "SELLING",
-          product,
-          row["Stock"] - product.stock
-        );
+      const ticker = row["Name"];
+      const cache = Object.create(null);
+      cache[ticker] = Object.create(null);
+      cache[ticker]["PREV_STOCK"] = row["Stock"];
+      cache[ticker]["STOCK"] = product.stock;
+      cache[ticker]["MAX_PURCHASE"] = product.max_purchase;
 
+      if (product.stock < 1.1 * product.max_purchase) {
+        row["Status"] = "LOW STOCK";
+      } else if (product.stock < row["Stock"]) {
         row["Status"] = "SELLING";
-        row["Sent"] = today;
       } else {
         row["Status"] = product.status.toUpperCase();
+      }
+      cache[ticker]["STATUS"] = row["Status"];
+
+      const condition = row["Condition"];
+      const [trigger, trace] = evaluateExpression(cache, ticker, condition);
+
+      if (trigger) {
+        pushMessageCondition(message, condition, trace, row["Action"], product);
+        row["Sent"] = today;
       }
 
       row["Stock"] = product.stock;
